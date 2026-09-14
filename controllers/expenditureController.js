@@ -1,186 +1,122 @@
-const Expenditure = require('../models/Expenditure');
+const { supabase } = require('../config/db');
 const fs = require('fs');
 const path = require('path');
 
-// @desc    Create a new expenditure
-// @route   POST /api/expenditures
+const sortableFields = new Set(['amount', 'expenseDate', 'reason', 'createdAt']);
+
+const toClientRecord = (record) => ({
+  ...record,
+  _id: record.id,
+  expenseDate: record.expense_date,
+  receiptUrl: record.receipt_url,
+  receiptFileName: record.receipt_file_name,
+  receiptFileType: record.receipt_file_type
+});
+
+const receiptPath = (receiptUrl) => receiptUrl ? path.join(__dirname, '..', receiptUrl) : null;
+
 exports.createExpenditure = async (req, res, next) => {
   try {
     const { reason, amount, expenseDate } = req.body;
-
-    if (!reason || !amount || !expenseDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide expense reason, amount, and date'
-      });
+    if (!reason?.trim() || amount === undefined || !expenseDate) {
+      return res.status(400).json({ success: false, message: 'Please provide expense reason, amount, and date' });
     }
-
-    if (Number(amount) < 1) {
-      return res.status(400).json({
-        success: false,
-        message: 'Amount must be at least ₹1'
-      });
+    if (!Number.isFinite(Number(amount)) || Number(amount) < 1) {
+      return res.status(400).json({ success: false, message: 'Amount must be at least ₹1' });
     }
 
     const expenditureData = {
-      reason,
+      reason: reason.trim(),
       amount: Number(amount),
-      expenseDate
+      expense_date: expenseDate
     };
-
-    // Handle file upload
     if (req.file) {
-      expenditureData.receiptUrl = `/uploads/${req.file.filename}`;
-      expenditureData.receiptFileName = req.file.originalname;
-      expenditureData.receiptFileType = req.file.mimetype;
+      expenditureData.receipt_url = `/uploads/${req.file.filename}`;
+      expenditureData.receipt_file_name = req.file.originalname;
+      expenditureData.receipt_file_type = req.file.mimetype;
     }
 
-    const expenditure = await Expenditure.create(expenditureData);
-    res.status(201).json({ success: true, data: expenditure });
+    const { data, error } = await supabase.from('expenditures').insert(expenditureData).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data: toClientRecord(data) });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Get all expenditures with search, filter, sort
-// @route   GET /api/expenditures
 exports.getExpenditures = async (req, res, next) => {
   try {
     const { search, startDate, endDate, sortBy, sortOrder } = req.query;
-    let query = {};
+    let query = supabase.from('expenditures').select('*');
+    if (search) query = query.ilike('reason', `%${search}%`);
+    if (startDate) query = query.gte('expense_date', startDate);
+    if (endDate) query = query.lte('expense_date', `${endDate}T23:59:59.999Z`);
 
-    // Search by reason
-    if (search) {
-      query.reason = { $regex: search, $options: 'i' };
-    }
+    const field = sortableFields.has(sortBy) ? sortBy : 'createdAt';
+    const column = field === 'expenseDate' ? 'expense_date' : field === 'createdAt' ? 'created_at' : field;
+    const { data, error } = await query.order(column, { ascending: sortOrder === 'asc' });
+    if (error) throw error;
 
-    // Filter by date range
-    if (startDate || endDate) {
-      query.expenseDate = {};
-      if (startDate) query.expenseDate.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        query.expenseDate.$lte = end;
-      }
-    }
-
-    // Sort
-    let sort = { createdAt: -1 };
-    if (sortBy) {
-      sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
-    }
-
-    const expenditures = await Expenditure.find(query).sort(sort);
-
-    // Calculate total
-    const totalResult = await Expenditure.aggregate([
-      { $match: query },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]);
-    const total = totalResult.length > 0 ? totalResult[0].total : 0;
-
-    res.json({
-      success: true,
-      count: expenditures.length,
-      total,
-      data: expenditures
-    });
+    const expenditures = (data || []).map(toClientRecord);
+    const total = expenditures.reduce((sum, item) => sum + Number(item.amount), 0);
+    res.json({ success: true, count: expenditures.length, total, data: expenditures });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Get single expenditure
-// @route   GET /api/expenditures/:id
 exports.getExpenditureById = async (req, res, next) => {
   try {
-    const expenditure = await Expenditure.findById(req.params.id);
-    if (!expenditure) {
-      return res.status(404).json({
-        success: false,
-        message: 'Expenditure not found'
-      });
-    }
-    res.json({ success: true, data: expenditure });
+    const { data, error } = await supabase.from('expenditures').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, message: 'Expenditure not found' });
+    res.json({ success: true, data: toClientRecord(data) });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Update expenditure
-// @route   PUT /api/expenditures/:id
 exports.updateExpenditure = async (req, res, next) => {
   try {
     const { reason, amount, expenseDate } = req.body;
-
-    if (amount !== undefined && Number(amount) < 1) {
-      return res.status(400).json({
-        success: false,
-        message: 'Amount must be at least ₹1'
-      });
+    if (amount !== undefined && (!Number.isFinite(Number(amount)) || Number(amount) < 1)) {
+      return res.status(400).json({ success: false, message: 'Amount must be at least ₹1' });
     }
 
-    const updateData = {};
-    if (reason !== undefined) updateData.reason = reason;
-    if (amount !== undefined) updateData.amount = Number(amount);
-    if (expenseDate !== undefined) updateData.expenseDate = expenseDate;
+    const { data: existing, error: findError } = await supabase.from('expenditures').select('*').eq('id', req.params.id).maybeSingle();
+    if (findError) throw findError;
+    if (!existing) return res.status(404).json({ success: false, message: 'Expenditure not found' });
 
-    // Handle new file upload
+    const updates = {};
+    if (reason !== undefined) updates.reason = reason.trim();
+    if (amount !== undefined) updates.amount = Number(amount);
+    if (expenseDate !== undefined) updates.expense_date = expenseDate;
     if (req.file) {
-      // Delete old receipt file if exists
-      const oldExpenditure = await Expenditure.findById(req.params.id);
-      if (oldExpenditure && oldExpenditure.receiptUrl) {
-        const oldFilePath = path.join(__dirname, '..', oldExpenditure.receiptUrl);
-        if (fs.existsSync(oldFilePath)) {
-          fs.unlinkSync(oldFilePath);
-        }
-      }
-
-      updateData.receiptUrl = `/uploads/${req.file.filename}`;
-      updateData.receiptFileName = req.file.originalname;
-      updateData.receiptFileType = req.file.mimetype;
+      const oldFilePath = receiptPath(existing.receipt_url);
+      if (oldFilePath && fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
+      updates.receipt_url = `/uploads/${req.file.filename}`;
+      updates.receipt_file_name = req.file.originalname;
+      updates.receipt_file_type = req.file.mimetype;
     }
 
-    const expenditure = await Expenditure.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    );
-
-    if (!expenditure) {
-      return res.status(404).json({
-        success: false,
-        message: 'Expenditure not found'
-      });
-    }
-
-    res.json({ success: true, data: expenditure });
+    const { data, error } = await supabase.from('expenditures').update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ success: true, data: toClientRecord(data) });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Delete expenditure
-// @route   DELETE /api/expenditures/:id
 exports.deleteExpenditure = async (req, res, next) => {
   try {
-    const expenditure = await Expenditure.findByIdAndDelete(req.params.id);
-    if (!expenditure) {
-      return res.status(404).json({
-        success: false,
-        message: 'Expenditure not found'
-      });
-    }
+    const { data: existing, error: findError } = await supabase.from('expenditures').select('*').eq('id', req.params.id).maybeSingle();
+    if (findError) throw findError;
+    if (!existing) return res.status(404).json({ success: false, message: 'Expenditure not found' });
 
-    // Delete receipt file if exists
-    if (expenditure.receiptUrl) {
-      const filePath = path.join(__dirname, '..', expenditure.receiptUrl);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    }
-
+    const { error } = await supabase.from('expenditures').delete().eq('id', req.params.id);
+    if (error) throw error;
+    const filePath = receiptPath(existing.receipt_url);
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
     res.json({ success: true, data: {} });
   } catch (error) {
     next(error);

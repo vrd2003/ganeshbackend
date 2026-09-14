@@ -1,49 +1,47 @@
-const Contribution = require('../models/Contribution');
-const Expenditure = require('../models/Expenditure');
+const { supabase } = require('../config/db');
 
-// @desc    Get dashboard summary
-// @route   GET /api/dashboard/summary
+const mapContribution = (record) => ({
+  ...record,
+  _id: record.id,
+  contributorName: record.contributor_name,
+  contributionDate: record.contribution_date
+});
+
+const mapExpenditure = (record) => ({
+  ...record,
+  _id: record.id,
+  expenseDate: record.expense_date,
+  receiptUrl: record.receipt_url,
+  receiptFileName: record.receipt_file_name,
+  receiptFileType: record.receipt_file_type
+});
+
 exports.getSummary = async (req, res, next) => {
   try {
-    // Get total contribution using aggregation
-    const contributionAgg = await Contribution.aggregate([
-      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    const [contributionResult, expenditureResult] = await Promise.all([
+      supabase.from('contributions').select('*').order('created_at', { ascending: false }),
+      supabase.from('expenditures').select('*').order('created_at', { ascending: false })
     ]);
+    if (contributionResult.error) throw contributionResult.error;
+    if (expenditureResult.error) throw expenditureResult.error;
 
-    // Get distinct contributors count
-    const distinctContributors = await Contribution.distinct('contributorName');
-
-    // Get total expenditure using aggregation
-    const expenditureAgg = await Expenditure.aggregate([
-      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-    ]);
-
-    const totalContribution = contributionAgg.length > 0 ? contributionAgg[0].total : 0;
-    const totalContributionEntries = contributionAgg.length > 0 ? contributionAgg[0].count : 0;
-    const totalExpenditure = expenditureAgg.length > 0 ? expenditureAgg[0].total : 0;
-    const totalExpenditureEntries = expenditureAgg.length > 0 ? expenditureAgg[0].count : 0;
-    const balance = totalContribution - totalExpenditure;
-
-    // Recent records
-    const recentContributions = await Contribution.find()
-      .sort({ createdAt: -1 })
-      .limit(5);
-
-    const recentExpenditures = await Expenditure.find()
-      .sort({ createdAt: -1 })
-      .limit(5);
+    const contributions = contributionResult.data || [];
+    const expenditures = expenditureResult.data || [];
+    const totalContribution = contributions.reduce((sum, item) => sum + Number(item.amount), 0);
+    const totalExpenditure = expenditures.reduce((sum, item) => sum + Number(item.amount), 0);
+    const distinctContributors = new Set(contributions.map((item) => item.contributor_name.trim().toLowerCase()));
 
     res.json({
       success: true,
       data: {
         totalContribution,
         totalExpenditure,
-        balance,
-        totalContributors: distinctContributors.length,
-        totalContributionEntries,
-        totalExpenditureEntries,
-        recentContributions,
-        recentExpenditures
+        balance: totalContribution - totalExpenditure,
+        totalContributors: distinctContributors.size,
+        totalContributionEntries: contributions.length,
+        totalExpenditureEntries: expenditures.length,
+        recentContributions: contributions.slice(0, 5).map(mapContribution),
+        recentExpenditures: expenditures.slice(0, 5).map(mapExpenditure)
       }
     });
   } catch (error) {

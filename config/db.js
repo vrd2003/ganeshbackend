@@ -1,13 +1,19 @@
-const mongoose = require('mongoose');
+const { createClient } = require('@supabase/supabase-js');
 
 const connectDB = async () => {
-  try {
-    const conn = await mongoose.connect(process.env.MONGODB_URI);
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
-  } catch (error) {
-    console.error(`MongoDB Connection Error: ${error.message}`);
-    process.exit(1);
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
   }
+
+  const { error } = await supabase.from('contributions').select('id').limit(1);
+  if (error) throw error;
+  console.log('Supabase Connected');
 };
 
-module.exports = connectDB;
+const supabase = createClient(
+  process.env.SUPABASE_URL || 'https://invalid.supabase.co',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || 'invalid-key',
+  { auth: { autoRefreshToken: false, persistSession: false } }
+);
+
+module.exports = { connectDB, supabase };

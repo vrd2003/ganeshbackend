@@ -16,23 +16,6 @@ const errorHandler = (err, req, res, next) => {
     });
   }
 
-  // Mongoose validation errors
-  if (err.name === 'ValidationError') {
-    const messages = Object.values(err.errors).map(e => e.message);
-    return res.status(400).json({
-      success: false,
-      message: messages.join(', ')
-    });
-  }
-
-  // Mongoose cast errors (invalid ObjectId)
-  if (err.name === 'CastError') {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid record ID'
-    });
-  }
-
   // Default error
   res.status(err.statusCode || 500).json({
     success: false,

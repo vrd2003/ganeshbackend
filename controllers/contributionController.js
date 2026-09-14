@@ -1,150 +1,102 @@
-const Contribution = require('../models/Contribution');
+const { supabase } = require('../config/db');
 
-// @desc    Create a new contribution
-// @route   POST /api/contributions
+const sortableFields = new Set(['amount', 'contributionDate', 'contributorName', 'createdAt']);
+
+const toClientRecord = (record) => ({
+  ...record,
+  _id: record.id,
+  contributorName: record.contributor_name,
+  contributionDate: record.contribution_date
+});
+
+const validateContribution = ({ contributorName, amount, contributionDate }) => {
+  if (!contributorName?.trim() || amount === undefined || !contributionDate) {
+    return 'Please provide contributor name, amount, and date';
+  }
+  if (!Number.isFinite(Number(amount)) || Number(amount) < 1) {
+    return 'Amount must be at least ₹1';
+  }
+  return null;
+};
+
 exports.createContribution = async (req, res, next) => {
   try {
     const { contributorName, amount, contributionDate } = req.body;
+    const validationError = validateContribution({ contributorName, amount, contributionDate });
+    if (validationError) return res.status(400).json({ success: false, message: validationError });
 
-      if (!contributorName?.trim() || amount === undefined || !contributionDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide contributor name, amount, and date'
-      });
-    }
-
-    if (!Number.isFinite(Number(amount)) || Number(amount) < 1) {
-      return res.status(400).json({
-        success: false,
-        message: 'Amount must be at least ₹1'
-      });
-    }
-
-    const contribution = await Contribution.create({
-      contributorName: contributorName.trim(),
+    const { data, error } = await supabase.from('contributions').insert({
+      contributor_name: contributorName.trim(),
       amount: Number(amount),
-      contributionDate
-    });
+      contribution_date: contributionDate
+    }).select().single();
+    if (error) throw error;
 
-    res.status(201).json({ success: true, data: contribution });
+    res.status(201).json({ success: true, data: toClientRecord(data) });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Get all contributions with search, filter, sort
-// @route   GET /api/contributions
 exports.getContributions = async (req, res, next) => {
   try {
     const { search, startDate, endDate, sortBy, sortOrder } = req.query;
-    let query = {};
+    let query = supabase.from('contributions').select('*');
 
-    // Search by contributor name
-    if (search) {
-      query.contributorName = { $regex: search, $options: 'i' };
-    }
+    if (search) query = query.ilike('contributor_name', `%${search}%`);
+    if (startDate) query = query.gte('contribution_date', startDate);
+    if (endDate) query = query.lte('contribution_date', `${endDate}T23:59:59.999Z`);
 
-    // Filter by date range
-    if (startDate || endDate) {
-      query.contributionDate = {};
-      if (startDate) query.contributionDate.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        query.contributionDate.$lte = end;
-      }
-    }
+    const field = sortableFields.has(sortBy) ? sortBy : 'createdAt';
+    const column = field === 'contributorName' ? 'contributor_name' : field === 'contributionDate' ? 'contribution_date' : field === 'createdAt' ? 'created_at' : field;
+    const { data, error } = await query.order(column, { ascending: sortOrder === 'asc' });
+    if (error) throw error;
 
-    // Sort
-    let sort = { createdAt: -1 }; // default: newest first
-    if (sortBy) {
-      sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
-    }
-
-    const contributions = await Contribution.find(query).sort(sort);
-
-    // Calculate total
-    const totalResult = await Contribution.aggregate([
-      { $match: query },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]);
-    const total = totalResult.length > 0 ? totalResult[0].total : 0;
-
-    res.json({
-      success: true,
-      count: contributions.length,
-      total,
-      data: contributions
-    });
+    const contributions = (data || []).map(toClientRecord);
+    const total = contributions.reduce((sum, item) => sum + Number(item.amount), 0);
+    res.json({ success: true, count: contributions.length, total, data: contributions });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Get single contribution
-// @route   GET /api/contributions/:id
 exports.getContributionById = async (req, res, next) => {
   try {
-    const contribution = await Contribution.findById(req.params.id);
-    if (!contribution) {
-      return res.status(404).json({
-        success: false,
-        message: 'Contribution not found'
-      });
-    }
-    res.json({ success: true, data: contribution });
+    const { data, error } = await supabase.from('contributions').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, message: 'Contribution not found' });
+    res.json({ success: true, data: toClientRecord(data) });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Update contribution
-// @route   PUT /api/contributions/:id
 exports.updateContribution = async (req, res, next) => {
   try {
     const { contributorName, amount, contributionDate } = req.body;
-
     if (amount !== undefined && (!Number.isFinite(Number(amount)) || Number(amount) < 1)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Amount must be at least ₹1'
-      });
+      return res.status(400).json({ success: false, message: 'Amount must be at least ₹1' });
     }
 
-    const contribution = await Contribution.findByIdAndUpdate(
-      req.params.id,
-      {
-        ...(contributorName !== undefined && { contributorName: contributorName.trim() }),
-        ...(amount !== undefined && { amount: Number(amount) }),
-        ...(contributionDate !== undefined && { contributionDate })
-      },
-      { new: true, runValidators: true }
-    );
+    const updates = {};
+    if (contributorName !== undefined) updates.contributor_name = contributorName.trim();
+    if (amount !== undefined) updates.amount = Number(amount);
+    if (contributionDate !== undefined) updates.contribution_date = contributionDate;
 
-    if (!contribution) {
-      return res.status(404).json({
-        success: false,
-        message: 'Contribution not found'
-      });
-    }
-
-    res.json({ success: true, data: contribution });
+    const { data, error } = await supabase.from('contributions').update(updates).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, message: 'Contribution not found' });
+    res.json({ success: true, data: toClientRecord(data) });
   } catch (error) {
     next(error);
   }
 };
 
-// @desc    Delete contribution
-// @route   DELETE /api/contributions/:id
 exports.deleteContribution = async (req, res, next) => {
   try {
-    const contribution = await Contribution.findByIdAndDelete(req.params.id);
-    if (!contribution) {
-      return res.status(404).json({
-        success: false,
-        message: 'Contribution not found'
-      });
-    }
+    const { data, error } = await supabase.from('contributions').delete().eq('id', req.params.id).select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, message: 'Contribution not found' });
     res.json({ success: true, data: {} });
   } catch (error) {
     next(error);
