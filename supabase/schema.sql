@@ -1,5 +1,9 @@
 create extension if not exists pgcrypto;
 
+insert into storage.buckets (id, name, public)
+values ('receipts', 'receipts', true)
+on conflict (id) do update set public = excluded.public;
+
 create table if not exists public.contributions (
   id uuid primary key default gen_random_uuid(),
   contributor_name text not null check (length(trim(contributor_name)) > 0),

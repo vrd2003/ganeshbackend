@@ -1,5 +1,4 @@
 const { supabase } = require('../config/db');
-const fs = require('fs');
 const path = require('path');
 
 const sortableFields = new Set(['amount', 'expenseDate', 'reason', 'createdAt']);
@@ -13,7 +12,30 @@ const toClientRecord = (record) => ({
   receiptFileType: record.receipt_file_type
 });
 
-const receiptPath = (receiptUrl) => receiptUrl ? path.join(__dirname, '..', receiptUrl) : null;
+const receiptBucket = 'receipts';
+
+const getReceiptStoragePath = (receiptUrl) => {
+  const marker = `/storage/v1/object/public/${receiptBucket}/`;
+  const markerIndex = receiptUrl?.indexOf(marker);
+  return markerIndex === -1 ? null : decodeURIComponent(receiptUrl.slice(markerIndex + marker.length));
+};
+
+const uploadReceipt = async (file) => {
+  const filePath = `receipt-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname)}`;
+  const { error } = await supabase.storage.from(receiptBucket).upload(filePath, file.buffer, {
+    contentType: file.mimetype,
+    upsert: false
+  });
+  if (error) throw error;
+  return supabase.storage.from(receiptBucket).getPublicUrl(filePath).data.publicUrl;
+};
+
+const deleteReceipt = async (receiptUrl) => {
+  const storagePath = getReceiptStoragePath(receiptUrl);
+  if (!storagePath) return;
+  const { error } = await supabase.storage.from(receiptBucket).remove([storagePath]);
+  if (error) throw error;
+};
 
 exports.createExpenditure = async (req, res, next) => {
   try {
@@ -31,7 +53,7 @@ exports.createExpenditure = async (req, res, next) => {
       expense_date: expenseDate
     };
     if (req.file) {
-      expenditureData.receipt_url = `/uploads/${req.file.filename}`;
+      expenditureData.receipt_url = await uploadReceipt(req.file);
       expenditureData.receipt_file_name = req.file.originalname;
       expenditureData.receipt_file_type = req.file.mimetype;
     }
@@ -92,15 +114,14 @@ exports.updateExpenditure = async (req, res, next) => {
     if (amount !== undefined) updates.amount = Number(amount);
     if (expenseDate !== undefined) updates.expense_date = expenseDate;
     if (req.file) {
-      const oldFilePath = receiptPath(existing.receipt_url);
-      if (oldFilePath && fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
-      updates.receipt_url = `/uploads/${req.file.filename}`;
+      updates.receipt_url = await uploadReceipt(req.file);
       updates.receipt_file_name = req.file.originalname;
       updates.receipt_file_type = req.file.mimetype;
     }
 
     const { data, error } = await supabase.from('expenditures').update(updates).eq('id', req.params.id).select().single();
     if (error) throw error;
+    if (req.file) await deleteReceipt(existing.receipt_url);
     res.json({ success: true, data: toClientRecord(data) });
   } catch (error) {
     next(error);
@@ -115,8 +136,7 @@ exports.deleteExpenditure = async (req, res, next) => {
 
     const { error } = await supabase.from('expenditures').delete().eq('id', req.params.id);
     if (error) throw error;
-    const filePath = receiptPath(existing.receipt_url);
-    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    await deleteReceipt(existing.receipt_url);
     res.json({ success: true, data: {} });
   } catch (error) {
     next(error);
