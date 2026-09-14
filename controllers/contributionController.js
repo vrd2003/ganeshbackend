@@ -47,7 +47,7 @@ exports.getContributions = async (req, res, next) => {
     if (startDate) query = query.gte('contribution_date', startDate);
     if (endDate) query = query.lte('contribution_date', endDate);
 
-    const field = sortableFields.has(sortBy) ? sortBy : 'createdAt';
+    const field = sortableFields.has(sortBy) ? sortBy : 'contributionDate';
     const column = field === 'contributorName' ? 'contributor_name' : field === 'contributionDate' ? 'contribution_date' : field === 'createdAt' ? 'created_at' : field;
     const { data, error } = await query.order(column, { ascending: sortOrder === 'asc' });
     if (error) throw error;

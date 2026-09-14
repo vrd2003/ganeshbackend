@@ -52,7 +52,7 @@ exports.getExpenditures = async (req, res, next) => {
     if (startDate) query = query.gte('expense_date', startDate);
     if (endDate) query = query.lte('expense_date', endDate);
 
-    const field = sortableFields.has(sortBy) ? sortBy : 'createdAt';
+    const field = sortableFields.has(sortBy) ? sortBy : 'expenseDate';
     const column = field === 'expenseDate' ? 'expense_date' : field === 'createdAt' ? 'created_at' : field;
     const { data, error } = await query.order(column, { ascending: sortOrder === 'asc' });
     if (error) throw error;
