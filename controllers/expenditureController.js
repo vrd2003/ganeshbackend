@@ -50,7 +50,7 @@ exports.getExpenditures = async (req, res, next) => {
     let query = supabase.from('expenditures').select('*');
     if (search) query = query.ilike('reason', `%${search}%`);
     if (startDate) query = query.gte('expense_date', startDate);
-    if (endDate) query = query.lte('expense_date', `${endDate}T23:59:59.999Z`);
+    if (endDate) query = query.lte('expense_date', endDate);
 
     const field = sortableFields.has(sortBy) ? sortBy : 'createdAt';
     const column = field === 'expenseDate' ? 'expense_date' : field === 'createdAt' ? 'created_at' : field;

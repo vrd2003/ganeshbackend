@@ -45,7 +45,7 @@ exports.getContributions = async (req, res, next) => {
 
     if (search) query = query.ilike('contributor_name', `%${search}%`);
     if (startDate) query = query.gte('contribution_date', startDate);
-    if (endDate) query = query.lte('contribution_date', `${endDate}T23:59:59.999Z`);
+    if (endDate) query = query.lte('contribution_date', endDate);
 
     const field = sortableFields.has(sortBy) ? sortBy : 'createdAt';
     const column = field === 'contributorName' ? 'contributor_name' : field === 'contributionDate' ? 'contribution_date' : field === 'createdAt' ? 'created_at' : field;
